@@ -17,21 +17,29 @@ public struct Particle
     public float inv_mass;
 }
 
-
+public struct QuadParticle
+{
+    public float[,] quad;
+}
 
 public class Main : MonoBehaviour
 {
+    float[,] matrix = new float[3, 9];
+    //Debug.Log(matrix);
 
     public NativeArray<Particle> ps;
+    //public NativeArray<Particle> psquadratic;
+
     int num_particles;
     const int division = 128;
-
+    //Debug.Log(division);
     const int mouse_force = 10;
     const float mouse_influence_radius = 1.0f;
 
-     const float gravity = -9.8f;
-    [SerializeField] private   float g = -2.0f;
-    
+    const float gravity = -9.8f;
+    [SerializeField]
+    private float g = -2.0f;
+
     //const float gravity = -2.0f;
     const float stiffness = 0.25f;
     //const float stiffness = 1.0f;
@@ -53,7 +61,8 @@ public class Main : MonoBehaviour
     {
         public NativeArray<Particle> ps;
 
-        [ReadOnly] public float dt;
+        [ReadOnly]
+        public float dt;
 
         //teste de alteração em tempo real
         //public float g;
@@ -64,7 +73,7 @@ public class Main : MonoBehaviour
             p.v += p.f * dt;
             p.p += p.v * dt;
             p.f = math.float3(0, gravity, 0);
-            
+
             //teste tempo real
             //p.f = math.float3(0, g, 0);
             //
@@ -77,8 +86,10 @@ public class Main : MonoBehaviour
     {
         public NativeArray<Particle> ps;
 
-        [ReadOnly] public float3 bounds;
-        [ReadOnly] public float inv_dt;
+        [ReadOnly]
+        public float3 bounds;
+        [ReadOnly]
+        public float inv_dt;
 
         public void Execute(int i)
         {
@@ -102,7 +113,8 @@ public class Main : MonoBehaviour
     struct Job_ApplyMouseForce : IJobParallelFor
     {
         public NativeArray<Particle> ps;
-        [ReadOnly] public float3 cam_point;
+        [ReadOnly]
+        public float3 cam_point;
 
         public void Execute(int i)
         {
@@ -125,9 +137,12 @@ public class Main : MonoBehaviour
     [BurstCompile]
     struct Job_SumCenterOfMass : IJobParallelFor
     {
-        [WriteOnly] public NativeArray<float4> com_sums;
-        [ReadOnly] public NativeArray<Particle> ps;
-        [ReadOnly] public int stride;
+        [WriteOnly]
+        public NativeArray<float4> com_sums;
+        [ReadOnly]
+        public NativeArray<Particle> ps;
+        [ReadOnly]
+        public int stride;
 
         public void Execute(int i)
         {
@@ -162,11 +177,16 @@ public class Main : MonoBehaviour
     [BurstCompile]
     struct Job_SumShapeMatrix : IJobParallelFor
     {
-        [WriteOnly] public NativeArray<float3x3> shape_matrices;
-        [ReadOnly] public float3 cm;
-        [ReadOnly] public NativeArray<Particle> ps;
-        [ReadOnly] public NativeArray<float3> deltas;
-        [ReadOnly] public int stride;
+        [WriteOnly]
+        public NativeArray<float3x3> shape_matrices;
+        [ReadOnly]
+        public float3 cm;
+        [ReadOnly]
+        public NativeArray<Particle> ps;
+        [ReadOnly]
+        public NativeArray<float3> deltas;
+        [ReadOnly]
+        public int stride;
 
         public void Execute(int i)
         {
@@ -200,9 +220,12 @@ public class Main : MonoBehaviour
     {
         public NativeArray<Particle> ps;
 
-        [ReadOnly] public float3 cm;
-        [ReadOnly] public NativeArray<float3> deltas;
-        [ReadOnly] public float3x3 GM;
+        [ReadOnly]
+        public float3 cm;
+        [ReadOnly]
+        public NativeArray<float3> deltas;
+        [ReadOnly]
+        public float3x3 GM;
 
         public void Execute(int i)
         {
@@ -221,6 +244,75 @@ public class Main : MonoBehaviour
     }
 
     #endregion
+
+
+    #region Shape Matching Jobs Quad
+    [BurstCompile]
+    struct Job_SumCenterOfMassQuad : IJobParallelFor
+    {
+        [WriteOnly]
+        public NativeArray<float4> com_sums;
+        [ReadOnly]
+        public NativeArray<Particle> ps;
+        //[ReadOnly] public NativeArray<QuadParticle> psquadratic;
+        [ReadOnly]
+        public int stride;
+
+        float[,] changeToNine(float3 position)
+        {
+            float[,] result = new float[9, 1];
+            result[0, 0] = position.x;
+            result[1, 0] = position.y;
+            result[2, 0] = position.z;
+
+            result[3, 0] = position.x * position.x;
+            result[4, 0] = position.y * position.y;
+            result[5, 0] = position.z * position.z;
+
+            result[6, 0] = position.x * position.y;
+            result[7, 0] = position.y * position.z;
+            result[8, 0] = position.z * position.x;
+
+            return result;
+        }
+
+        public void Execute(int i)
+        {
+            // only perform this step from the start of each batch index, every stride'th entry in the array onwards
+            if (i % stride != 0) return;
+
+            // calculate center of mass for this batch
+            float3 cm = math.float3(0);
+            float[,] cmQuad = new float[9, 1];
+
+            float wsum = 0.0f;
+            for (int idx = i; idx < i + stride; ++idx)
+            {
+                Particle p = ps[idx];
+                float wi = 1.0f / (p.inv_mass + eps);
+                cm += p.p * wi;
+                wsum += wi;
+            }
+            ////////////////////change
+            cmQuad = changeToNine(cm);
+            ///////////////////////////
+            // storing the total weight in the z component for use when combining later
+            float4 result = math.float4(cm.x, cm.y, cm.z, wsum);
+
+            com_sums[i] = result;
+
+        }
+
+
+
+
+
+    }
+
+
+
+    #endregion
+
     #endregion
 
 
@@ -279,7 +371,8 @@ public class Main : MonoBehaviour
         }
         float d = (A[p][p] - A[q][q]) / (2.0f * A[p][q]);
         float t = (1.0f) / (math.abs(d) + math.sqrt(d * d + 1.0f));
-        if (d < 0.0f) {
+        if (d < 0.0f)
+        {
             t = -t;
         }
         float c = (1.0f) / math.sqrt(d * d + 1.0f);
@@ -350,26 +443,26 @@ public class Main : MonoBehaviour
         public float3 v;
     }
 
-    MatrixAndVector eigenDecomposition( float3x3 A)
+    MatrixAndVector eigenDecomposition(float3x3 A)
     {
         const int numJacobiIterations = 10;
         const float epsilon = 1e-15f;
 
         float3x3 D = A;
-        MatrixAndVector eigen=new MatrixAndVector();
+        MatrixAndVector eigen = new MatrixAndVector();
         float3x3 eigenVecs;
-        float3 eigenVals=math.float3(0);
+        float3 eigenVals = math.float3(0);
 
         // only for symmetric matrices!
-        eigenVecs=math.float3x3(1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f);	// unit matrix
+        eigenVecs = math.float3x3(1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f);	// unit matrix
         int iter = 0;
         while (iter < numJacobiIterations)  // 3 off diagonal elements
         {
             // find off diagonal element with maximum modulus
             int p, q;
             float a, max;
-            max=math.abs(D[0][1]);
-            p = 0;q = 1;
+            max = math.abs(D[0][1]);
+            p = 0; q = 1;
             a = math.abs(D[0][2]);
             if (a > max)
             {
@@ -406,15 +499,16 @@ public class Main : MonoBehaviour
 
     /** Perform polar decomposition A = (U D U^T) R
      */
-     float3x3 polarDecomposition(float3x3 A) { 
-    
+    float3x3 polarDecomposition(float3x3 A)
+    {
+
         // A = SR, where S is symmetric and R is orthonormal
         // -> S = (A A^T)^(1/2)
 
         // A = U D U^T R
 
         float3x3 AAT = math.float3x3(0);
-        AAT.c0.x = A[0][0] * A[0][0] + A[0][1] * A[0][1] + A[0][2]*A[0][2];
+        AAT.c0.x = A[0][0] * A[0][0] + A[0][1] * A[0][1] + A[0][2] * A[0][2];
         AAT.c1.y = A[1][0] * A[1][0] + A[1][1] * A[1][1] + A[1][2] * A[1][2];
         AAT.c2.z = A[2][0] * A[2][0] + A[2][1] * A[2][1] + A[2][2] * A[2][2];
 
@@ -426,7 +520,7 @@ public class Main : MonoBehaviour
         AAT.c2.x = AAT[0][2];
         AAT.c2.y = AAT[1][2];
 
-        float3x3 R= math.float3x3(1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f);
+        float3x3 R = math.float3x3(1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f);
         MatrixAndVector decomposition = eigenDecomposition(AAT);
         float3x3 U = decomposition.m;
         float3 eigenVals = decomposition.v;
@@ -442,13 +536,13 @@ public class Main : MonoBehaviour
         float l2 = eigenVals[2]; if (l2 <= eps) l2 = 0.0f; else l2 = (1.0f) / d2;
 
         float3x3 S1 = math.float3x3(0);
-        S1.c0.x = l0*U[0][0] * U[0][0] + l1*U[0][1] * U[0][1] + l2*U[0][2] * U[0][2];
-        S1.c1.y = l0*U[1][0] * U[1][0] + l1*U[1][1] * U[1][1] + l2*U[1][2] * U[1][2];
-        S1.c2.z = l0*U[2][0] * U[2][0] + l1*U[2][1] * U[2][1] + l2*U[2][2] * U[2][2];
+        S1.c0.x = l0 * U[0][0] * U[0][0] + l1 * U[0][1] * U[0][1] + l2 * U[0][2] * U[0][2];
+        S1.c1.y = l0 * U[1][0] * U[1][0] + l1 * U[1][1] * U[1][1] + l2 * U[1][2] * U[1][2];
+        S1.c2.z = l0 * U[2][0] * U[2][0] + l1 * U[2][1] * U[2][1] + l2 * U[2][2] * U[2][2];
 
-        S1.c0.y = l0*U[0][0] * U[1][0] + l1*U[0][1] * U[1][1] + l2*U[0][2] * U[1][2];
-        S1.c0.z = l0*U[0][0] * U[2][0] + l1*U[0][1] * U[2][1] + l2*U[0][2] * U[2][2];
-        S1.c1.z = l0*U[1][0] * U[2][0] + l1*U[1][1] * U[2][1] + l2*U[1][2] * U[2][2];
+        S1.c0.y = l0 * U[0][0] * U[1][0] + l1 * U[0][1] * U[1][1] + l2 * U[0][2] * U[1][2];
+        S1.c0.z = l0 * U[0][0] * U[2][0] + l1 * U[0][1] * U[2][1] + l2 * U[0][2] * U[2][2];
+        S1.c1.z = l0 * U[1][0] * U[2][0] + l1 * U[1][1] * U[2][1] + l2 * U[1][2] * U[2][2];
 
         S1.c1.x = S1[0][1];
         S1.c2.x = S1[0][2];
@@ -463,8 +557,8 @@ public class Main : MonoBehaviour
         c2 = R.c2;
         if (math.lengthsq(c0) < eps)
             c0 = math.cross(c1, c2);
-        else if(math.lengthsq(c1) < eps)
-            c1= math.cross(c2, c0);
+        else if (math.lengthsq(c1) < eps)
+            c1 = math.cross(c2, c0);
         else
             c2 = math.cross(c0, c1);
 
@@ -474,13 +568,13 @@ public class Main : MonoBehaviour
 
         //R = A;
         return R;
-     }
+    }
 
 
     /** Return the one norm of the matrix.
      */
-     float  oneNorm(float3x3 A)
-     {
+    float oneNorm(float3x3 A)
+    {
         float sum1 = math.abs(A[0][0]) + math.abs(A[1][0]) + math.abs(A[2][0]);
         float sum2 = math.abs(A[0][1]) + math.abs(A[1][1]) + math.abs(A[2][1]);
         float sum3 = math.abs(A[0][2]) + math.abs(A[1][2]) + math.abs(A[2][2]);
@@ -490,13 +584,13 @@ public class Main : MonoBehaviour
         if (sum3 > maxSum)
             maxSum = sum3;
         return maxSum;
-     }
+    }
 
 
     /** Return the inf norm of the matrix.
      */
-     float infNorm(float3x3 A)
-     {
+    float infNorm(float3x3 A)
+    {
         float sum1 = math.abs(A[0][0]) + math.abs(A[0][1]) + math.abs(A[0][2]);
         float sum2 = math.abs(A[1][0]) + math.abs(A[1][1]) + math.abs(A[1][2]);
         float sum3 = math.abs(A[2][0]) + math.abs(A[2][1]) + math.abs(A[2][2]);
@@ -506,11 +600,11 @@ public class Main : MonoBehaviour
         if (sum3 > maxSum)
             maxSum = sum3;
         return maxSum;
-     }
+    }
     /** Perform a polar decomposition of matrix M and return the rotation matrix R. This method handles the degenerated cases.
    */
-     float3x3 polarDecompositionStable( float3x3 M , float tolerance)
-     {
+    float3x3 polarDecompositionStable(float3x3 M, float tolerance)
+    {
         float3x3 Mt = math.transpose(M);
         float Mone = oneNorm(M);
         float Minf = infNorm(M);
@@ -586,7 +680,198 @@ public class Main : MonoBehaviour
         // Q = Mt^T
 
         return math.transpose(Mt);
-     }
+    }
+
+    #endregion
+
+
+    #region Math Quad
+
+    float[,] changeToNine(float3 position)
+    {
+        float[,] result = new float[9, 1];
+        result[0, 0] = position.x;
+        result[1, 0] = position.y;
+        result[2, 0] = position.z;
+
+        result[3, 0] = position.x * position.x;
+        result[4, 0] = position.y * position.y;
+        result[5, 0] = position.z * position.z;
+
+        result[6, 0] = position.x * position.y;
+        result[7, 0] = position.y * position.z;
+        result[8, 0] = position.z * position.x;
+
+        return result;
+    }
+
+    float[,] multiplic(float[,] first, float[,] second, int m1, int n1, int m2, int n2)
+    {
+        float[,] result = new float[m1, n2];
+        if (n1 != m2)
+        {
+            Debug.Log("multiplication invalid");
+            return result;
+        }
+        for (int i = 0; i < m1; i++)
+            for (int j = 0; j < n2; j++)
+            {
+                result[i, j] = 0.0f;
+                for (int k = 0; k < n1; k++)
+                    result[i, j] += first[i, k] * second[k, j];
+            }
+        return result;
+
+
+    }
+
+    float[,] makeSum(float[,] first, float[,] second, int m1, int n1, int m2, int n2)
+    {
+        float[,] result = new float[m1, n2];
+        if (m1 != m2 || n1 != n2)
+        {
+            Debug.Log("invalid sum");
+            return result;
+        }
+        for (int i = 0; i < m1; i++)
+            for (int j = 0; j < n1; j++)
+                result[i, j] += first[i, j] + second[i, j];
+        return result;
+    }
+
+    float[,] tranposeMatrix(float[,] matrix)
+    {
+        float[,] result = new float[1, 9];
+        for (int j = 0; j < 9; j++)
+        {
+            result[0, j] = matrix[j, 0];
+        }
+        return result;
+    }
+
+    float[,] multiplyByNumber(float[,] matrix, int m1, int n1, float number)
+    {
+        float[,] result = new float[m1, n1];
+        for (int i = 0; i < m1; i++)
+            for (int j = 0; j < n1; j++)
+                result[i, j] = matrix[i, j] * number;
+        return result;
+    }
+
+
+    //Implementar inversa
+
+    struct LU
+    {
+        public float[,] L;
+        public float[,] U;
+    }
+
+    LU LUDecomposition(float[,] matrix, int n)
+    {
+        LU decomposition = new LU();
+        decomposition.L = new float[n, n];
+        decomposition.U = new float[n, n];
+        for (int i = 0; i < n; i++)
+        {
+            decomposition.U[i, i] = 1.0f;
+
+        }
+        decomposition.L[0, 0] = matrix[0, 0];
+        for (int j = 1; j < n; j++)
+        {
+            decomposition.L[j, 0] = matrix[j, 0];
+
+            //error divided by zero
+            if (decomposition.L[0, 0] == 0)
+                Debug.Log("zero in LU decomposition");
+
+            decomposition.U[0, j] = matrix[0, j] / decomposition.L[0, 0];
+        }
+        for (int j = 2; j <= n - 1; j++)
+        {
+            for (int i = j; i <= n; i++)
+            {
+                decomposition.L[i - 1, j - 1] = matrix[i - 1, j - 1];
+                for (int k = 1; k <= j - 1; k++)
+                    decomposition.L[i - 1, j - 1] -= decomposition.L[i - 1, k - 1] * decomposition.U[k - 1, j - 1];
+            }
+            for (int k = j + 1; k <= n; k++)
+            {
+                decomposition.U[j - 1, k - 1] = matrix[j - 1, k - 1];
+                for (int i = 1; i <= j - 1; i++)
+                    decomposition.U[j - 1, k - 1] -= decomposition.L[j - 1, i - 1] * decomposition.U[i - 1, k - 1];
+
+
+                //error divided by zero
+                if (decomposition.L[j - 1, j - 1] == 0)
+                    Debug.Log("zero in LU decomposition");
+
+                decomposition.U[j - 1, k - 1] = decomposition.U[j - 1, k - 1] / decomposition.L[j - 1, j - 1];
+            }
+        }
+        decomposition.L[n - 1, n - 1] = matrix[n - 1, n - 1];
+        for (int k = 1; k <= n - 1; k++)
+            decomposition.L[n - 1, n - 1] -= decomposition.L[n - 1, k - 1] * decomposition.U[k - 1, n - 1];
+
+
+        return decomposition;
+    }
+
+
+    //Forward Substitution
+    float[,] columnForL(float[,] L, float[,] x, int n)
+    {
+        float[,] column = new float[n, 1];
+        column[0, 0] = x[0, 0] / L[0, 0];
+        for (int i = 1; i < n; i++)
+        {
+            float result = x[i, 0];
+            for (int j = 0; j < i; j++)
+                result -= L[i, j] * column[j, 0];
+            result = result / L[i, i];
+            column[i, 0] = result;
+        }
+        return column;
+
+    }
+
+    //Backward Substitution
+    float[,] columnOfInverse(float[,] U, float[,] x, int n)
+    {
+        float[,] column = new float[n, 1];
+        column[n - 1, 0] = x[n - 1, 0] / U[n - 1, n - 1];
+        for (int i = n - 2; i >= 0; i--)
+        {
+            float result = x[i, 0];
+            for (int j = n - 1; j > i; j--)
+                result -= U[i, j] * column[j, 0];
+
+            //error divided by zero
+            if (U[i, i] == 0)
+                Debug.Log("zero in U matrix");
+
+            result = result / U[i, i];
+            column[i, 0] = result;
+        }
+        return column;
+    }
+
+    float[,] findInverse(float[,] matrix, int n)
+    {
+        float[,] inverse = new float[n, n];
+        LU decomposition = LUDecomposition(matrix, n);
+        for (int j = 0; j < n; j++)
+        {
+            float[,] column = new float[n, 1];
+            column[j, 0] = 1.0f;
+            column = columnForL(decomposition.L, column, n);
+            column = columnOfInverse(decomposition.U, column, n);
+            for (int i = 0; i < n; i++)
+                inverse[i, j] = column[i, 0];
+        }
+        return inverse;
+    }
 
     #endregion
 
@@ -594,6 +879,75 @@ public class Main : MonoBehaviour
     // Use this for initialization
     void Start()
     {
+        //matrix[0, 0] = 7.0f;
+        //Debug.Log(matrix[0,0]);
+
+        matrix[0, 0] = 3.0f;
+        matrix[0, 1] = -0.1f;
+        matrix[0, 2] = -0.2f;
+        matrix[1, 0] = 0.1f;
+        matrix[1, 1] = 7.0f;
+        matrix[1, 2] = -0.3f;
+        matrix[2, 0] = 0.3f;
+        matrix[2, 1] = -0.2f;
+        matrix[2, 2] = 10.0f;
+
+
+        /*matrix[0, 0] = 1.0f;
+        matrix[0, 1] = 2.0f;
+        matrix[0, 2] = 3.0f;
+        matrix[1, 0] = 4.0f;
+        matrix[1, 1] = 5.0f;
+        matrix[1, 2] = 6.0f;
+        matrix[2, 0] = 7.0f;
+        matrix[2, 1] = 8.0f;
+        matrix[2, 2] = 9.0f;*/
+
+        //matrix[0, 0] = 4.0f;
+        // matrix[0, 1] = 7.0f;
+        //matrix[1, 0] = 2.0f;
+        // matrix[1, 1] = 6.0f;
+
+        /*LU r = LUDecomposition(matrix, 2);
+        Debug.Log("L");
+        Debug.Log(r.L[0, 0]);
+        Debug.Log(r.L[0, 1]);
+       // Debug.Log(r.L[0, 2]);
+        Debug.Log(r.L[1, 0]);
+        Debug.Log(r.L[1, 1]);
+       // Debug.Log(r.L[1, 2]);
+        //Debug.Log(r.L[2, 0]);
+       // Debug.Log(r.L[2, 1]);
+       // Debug.Log(r.L[2, 2]);
+
+        Debug.Log("U");
+        Debug.Log(r.U[0, 0]);
+        Debug.Log(r.U[0, 1]);
+       // Debug.Log(r.U[0, 2]);
+        Debug.Log(r.U[1, 0]);
+        Debug.Log(r.U[1, 1]);
+       // Debug.Log(r.U[1, 2]);
+       // Debug.Log(r.U[2, 0]);
+       // Debug.Log(r.U[2, 1]);
+       // Debug.Log(r.U[2, 2]);*/
+
+        Debug.Log("I");
+        float[,] inn = findInverse(matrix, 3);
+        Debug.Log(inn[0, 0]);
+        Debug.Log(inn[0, 1]);
+
+        Debug.Log(inn[0, 2]);
+
+        Debug.Log(inn[1, 0]);
+        Debug.Log(inn[1, 1]);
+
+        Debug.Log(inn[1, 2]);
+        Debug.Log(inn[2, 0]);
+        Debug.Log(inn[2, 1]);
+        Debug.Log(inn[2, 2]);
+
+
+
         //test jacobi
         /*float3x3 A = math.float3x3(5.0f, 7.0f, 3.0f, 7.0f, 0.3f, 4.3f, 3.0f, 4.3f, 9.0f);
         float3x3 R = math.float3x3(1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f);
@@ -617,8 +971,11 @@ public class Main : MonoBehaviour
         Debug.Log("eVal");
         Debug.Log(e.v);
         */
+
+        bool quadratic = false;
+
         dt = Time.fixedDeltaTime;
-        bounds = math.float3(4.75f, 4.75f,4.75f);
+        bounds = math.float3(4.75f, 4.75f, 4.75f);
 
         var point_sampler = GameObject.FindObjectOfType<PointSampler>();
         var samples = point_sampler.points;
@@ -629,6 +986,7 @@ public class Main : MonoBehaviour
         num_particles = po2_amnt >> 1;
 
         ps = new NativeArray<Particle>(num_particles, Allocator.Persistent);
+        //psquadratic= new NativeArray<Particle>(num_particles, Allocator.Persistent);
 
         // populate our array of particles from the samples given, set their initial state
         for (int i = 0; i < num_particles; ++i)
@@ -636,13 +994,20 @@ public class Main : MonoBehaviour
             float3 sample = samples[i];
 
             Particle p = new Particle();
-            p.x = p.p = math.float3(sample.x, sample.y,sample.z);
+            p.x = p.p = math.float3(sample.x, sample.y, sample.z);
             p.v = p.f = math.float3(0);
 
             // setting masses based on the greyscale value of our image
             p.inv_mass = 1.0f / masses[i];
 
             ps[i] = p;
+
+            ///////////////////////////////////////////////////// For quad
+
+            //QuadParticle quadvec = new QuadParticle();
+            //quadvec.quad = new float[9, 1];
+            //quadvec.quad[0,0]=p.
+
         }
         bool could_init = Init_Body();
         if (!could_init) print("Issue initializing shape");
@@ -669,7 +1034,7 @@ public class Main : MonoBehaviour
         rest_cm /= wsum;
 
         // Calculate inverse rest matrix for use in linear deformation shape matching
-        float3x3 A = math.float3x3(0, 0,0);
+        float3x3 A = math.float3x3(0, 0, 0);
         for (int i = 0; i < num_particles; i++)
         {
             float3 qi = ps[i].x - rest_cm;
@@ -762,7 +1127,7 @@ public class Main : MonoBehaviour
 
         // calculating the rotation matrix R
 
-         //float3x3 R = polarDecomposition(A);
+        //float3x3 R = polarDecomposition(A);
         const float eps = 1e-6f;
         float3x3 R = polarDecompositionStable(A, eps);
 
@@ -846,6 +1211,8 @@ public class Main : MonoBehaviour
     private void OnDestroy()
     {
         ps.Dispose();
+        //psquadratic.Dispose();
+
         deltas.Dispose();
         com_sums.Dispose();
         shape_matrices.Dispose();
