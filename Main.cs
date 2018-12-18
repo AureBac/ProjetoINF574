@@ -59,15 +59,13 @@ public class Main : MonoBehaviour
     float3x3 inv_rest_matrix;
     float[,] inv_rest_matrix_Quad;
     NativeArray<float3> deltas; // precomputed distances of particles to shape center of mass
-    NativeArray<QuadParticle> deltas_quad;
 
-    NativeArray<qParticle> d;                                       // test type
+    NativeArray<qParticle> deltas9;                                       // test type
     NativeArray<float4> com_sums; // temp array for parallelised center of mass summation
     NativeArray<float3x3> shape_matrices; // temp array for parallelised deformed shape matrix summation
 
-    
-    NativeArray<QuadParticle> shape_matrices_quad;
-    NativeArray<qParticleBig> smq;      // test type big
+
+    NativeArray<qParticleBig> shape_matrices3x9;      // test type big
 
     #region Jobs
     #region Integration
@@ -79,7 +77,7 @@ public class Main : MonoBehaviour
         [ReadOnly] public float dt;
 
         //teste de alteração em tempo real
-        //public float g;
+        public float g;
         //
         public void Execute(int i)
         {
@@ -89,7 +87,7 @@ public class Main : MonoBehaviour
             p.f = math.float3(0, gravity, 0);
 
             //teste tempo real
-            //p.f = math.float3(0, g, 0);
+            p.f = math.float3(0, g, 0);
             //
             ps[i] = p;
         }
@@ -231,7 +229,7 @@ public class Main : MonoBehaviour
         {
             // calculating the "ideal" position of a particle by multiplying by the deformed shape matrix GM, offset by our center of mass
             float3 goal = math.mul(GM, deltas[i]) + cm;
-
+            //float3 goal = math.mul(GM, deltas[i]);
             // amount to move our particle this timestep for shape matching. if stiffness = 1.0 this corresponds to rigid body behaviour
             // (though you'd need to do more PBD iterations in the main loop to get this stiff enough)
             float3 delta = (goal - ps[i].p) * stiffness;
@@ -311,19 +309,17 @@ public class Main : MonoBehaviour
     [BurstCompile]
     struct Job_SumShapeMatrixQuad : IJobParallelFor
     {
-        [WriteOnly] public NativeArray<QuadParticle> shape_matrices_quad;
-
-        [WriteOnly] public NativeArray<qParticleBig> smq;     // test type big
+        [WriteOnly] public NativeArray<float3x3> shape_matrices;
+        [WriteOnly] public NativeArray<qParticleBig> shape_matrices3x9;     // test type big
         [ReadOnly] public float3 cm;
+        [ReadOnly] public NativeArray<float3> deltas;
         [ReadOnly] public NativeArray<Particle> ps;
-        [ReadOnly] public NativeArray<QuadParticle> deltas_quad;
-
-        [ReadOnly] public NativeArray<qParticle> d;  // test type
-
-        
+        [ReadOnly] public NativeArray<qParticle> deltas9;  // test type
         [ReadOnly] public int stride;
 
-        float[,] mult(float[,] first, float[,] second, int m1, int n1, int m2, int n2)
+
+
+        float[,] multiplic(float[,] first, float[,] second, int m1, int n1, int m2, int n2)
         {
             float[,] result = new float[m1, n2];
             if (n1 != m2)
@@ -343,7 +339,7 @@ public class Main : MonoBehaviour
 
         }
 
-        float[,] sum(float[,] first, float[,] second, int m1, int n1, int m2, int n2)
+        float[,] makeSum(float[,] first, float[,] second, int m1, int n1, int m2, int n2)
         {
             float[,] result = new float[m1, n2];
             if (m1 != m2 || n1 != n2)
@@ -357,31 +353,115 @@ public class Main : MonoBehaviour
             return result;
         }
 
+        float[,] tranposeMatrix(float[,] matrix)
+        {
+            float[,] result = new float[1, 9];
+            for (int j = 0; j < 9; j++)
+            {
+                result[0, j] = matrix[j, 0];
+            }
+            return result;
+        }
+
+        float[,] multiplyByNumber(float[,] matrix, int m1, int n1, float number)
+        {
+            float[,] result = new float[m1, n1];
+            for (int i = 0; i < m1; i++)
+                for (int j = 0; j < n1; j++)
+                    result[i, j] = matrix[i, j] * number;
+            return result;
+        }
+
+
+
+
+
+        float[,] convertFromP(qParticle m)
+        {
+            float[,] M = new float[9, 1];
+            M[0, 0] = m.A.c0.x;
+            M[1, 0] = m.A.c1.x;
+            M[2, 0] = m.A.c2.x;
+            M[3, 0] = m.A.c0.y;
+            M[4, 0] = m.A.c1.y;
+            M[5, 0] = m.A.c2.y;
+            M[6, 0] = m.A.c0.z;
+            M[7, 0] = m.A.c1.z;
+            M[8, 0] = m.A.c2.z;
+            return M;
+        }
+
+        qParticleBig convertToPBig(float[,] M)
+        {
+            qParticleBig m = new qParticleBig();
+            m.A.c0.x = M[0, 0];
+            m.A.c1.x = M[0, 1];
+            m.A.c2.x = M[0, 2];
+            m.A.c0.y = M[1, 0];
+            m.A.c1.y = M[1, 1];
+            m.A.c2.y = M[1, 2];
+            m.A.c0.z = M[2, 0];
+            m.A.c1.z = M[2, 1];
+            m.A.c2.z = M[2, 2];
+
+            m.Q.c0.x = M[0, 3];
+            m.Q.c1.x = M[0, 4];
+            m.Q.c2.x = M[0, 5];
+            m.Q.c0.y = M[1, 3];
+            m.Q.c1.y = M[1, 4];
+            m.Q.c2.y = M[1, 5];
+            m.Q.c0.z = M[2, 3];
+            m.Q.c1.z = M[2, 4];
+            m.Q.c2.z = M[2, 5];
+
+            m.M.c0.x = M[0, 6];
+            m.M.c1.x = M[0, 7];
+            m.M.c2.x = M[0, 8];
+            m.M.c0.y = M[1, 6];
+            m.M.c1.y = M[1, 7];
+            m.M.c2.y = M[1, 8];
+            m.M.c0.z = M[2, 6];
+            m.M.c1.z = M[2, 7];
+            m.M.c2.z = M[2, 8];
+            return m;
+        }
+
+
         public void Execute(int i)
         {
             // same idea as in center of mass calculation
             if (i % stride != 0) return;
 
             // this is part of eq. (7) in the original paper, finding the optimal linear transformation matrix between our reference and deformed positions
-            float[,] mat = new float[3, 9];
+            float3x3 mat = math.float3x3(0, 0, 0);
+            float[,] matQuad = new float[3, 9];
             for (int idx = i; idx < i + stride; ++idx)
             {
                 Particle pi = ps[idx];
-                float[,] q = deltas_quad[idx].quad;
+                float3 q = deltas[idx];
                 float3 p = pi.p - cm;
+                float3 pl = p;
+                float[,] ql = convertFromP(deltas9[idx]);
                 float w = 1.0f / (pi.inv_mass + eps);
                 p *= w;
 
-                float[,] p_matrix = new float[3, 1];
-                p_matrix[0, 0] = p.x;
-                p_matrix[1, 0] = p.y;
-                p_matrix[2, 0] = p.z;
+                mat.c0 += p * q[0];
+                mat.c1 += p * q[1];
+                mat.c2 += p * q[2];
 
-                mat = sum(mat, mult(p_matrix, q, 3, 1, 1, 9), 3, 9, 3, 9);
+
+                float[,] pMatrix = new float[3, 1];
+                pMatrix[0, 0] = pl.x;
+                pMatrix[1, 0] = pl.y;
+                pMatrix[2, 0] = pl.z;
+                float[,] op = multiplyByNumber(pMatrix, 3, 1, w);
+                op = multiplic(op, tranposeMatrix(ql), 3, 1, 1, 9);
+                matQuad = makeSum(matQuad, op, 3, 9, 3, 9);
             }
-            QuadParticle aux=new QuadParticle();
-            aux.quad = mat;
-            shape_matrices_quad[i] = aux;
+
+            shape_matrices[i] = mat;
+            shape_matrices3x9[i] = convertToPBig(matQuad);
+
 
 
 
@@ -395,18 +475,18 @@ public class Main : MonoBehaviour
         public NativeArray<Particle> ps;
 
         [ReadOnly]
-        public float[,] cm;
+        public float3 cm;
         [ReadOnly]
-        public NativeArray<QuadParticle> deltas_quad;
+        public NativeArray<qParticle> deltas9;
 
         //test type
-        [ReadOnly]
-        public NativeArray<qParticle> d;
+        //[ReadOnly]
+        //public NativeArray<qParticle> d;
 
         [ReadOnly]
-        public float[,] GM_quad;
+        public qParticleBig GMQuadvalid;
 
-        float[,] mult(float[,] first, float[,] second, int m1, int n1, int m2, int n2)
+        float[,] multiplic(float[,] first, float[,] second, int m1, int n1, int m2, int n2)
         {
             float[,] result = new float[m1, n2];
             if (n1 != m2)
@@ -440,21 +520,110 @@ public class Main : MonoBehaviour
             return result;
         }
 
+        float[,] convertFromP(qParticle m)
+        {
+            float[,] M = new float[9, 1];
+            M[0, 0] = m.A.c0.x;
+            M[1, 0] = m.A.c1.x;
+            M[2, 0] = m.A.c2.x;
+            M[3, 0] = m.A.c0.y;
+            M[4, 0] = m.A.c1.y;
+            M[5, 0] = m.A.c2.y;
+            M[6, 0] = m.A.c0.z;
+            M[7, 0] = m.A.c1.z;
+            M[8, 0] = m.A.c2.z;
+            return M;
+        }
+
+        qParticleBig convertToPBig(float[,] M)
+        {
+            qParticleBig m = new qParticleBig();
+            m.A.c0.x = M[0, 0];
+            m.A.c1.x = M[0, 1];
+            m.A.c2.x = M[0, 2];
+            m.A.c0.y = M[1, 0];
+            m.A.c1.y = M[1, 1];
+            m.A.c2.y = M[1, 2];
+            m.A.c0.z = M[2, 0];
+            m.A.c1.z = M[2, 1];
+            m.A.c2.z = M[2, 2];
+
+            m.Q.c0.x = M[0, 3];
+            m.Q.c1.x = M[0, 4];
+            m.Q.c2.x = M[0, 5];
+            m.Q.c0.y = M[1, 3];
+            m.Q.c1.y = M[1, 4];
+            m.Q.c2.y = M[1, 5];
+            m.Q.c0.z = M[2, 3];
+            m.Q.c1.z = M[2, 4];
+            m.Q.c2.z = M[2, 5];
+
+            m.M.c0.x = M[0, 6];
+            m.M.c1.x = M[0, 7];
+            m.M.c2.x = M[0, 8];
+            m.M.c0.y = M[1, 6];
+            m.M.c1.y = M[1, 7];
+            m.M.c2.y = M[1, 8];
+            m.M.c0.z = M[2, 6];
+            m.M.c1.z = M[2, 7];
+            m.M.c2.z = M[2, 8];
+            return m;
+        }
+
+        float[,] convertFromPBig(qParticleBig m)
+        {
+            float[,] M = new float[3, 9];
+            M[0, 0] = m.A.c0.x;
+            M[0, 1] = m.A.c1.x;
+            M[0, 2] = m.A.c2.x;
+            M[1, 0] = m.A.c0.y;
+            M[1, 1] = m.A.c1.y;
+            M[1, 2] = m.A.c2.y;
+            M[2, 0] = m.A.c0.z;
+            M[2, 1] = m.A.c1.z;
+            M[2, 2] = m.A.c2.z;
+
+            M[0, 3] = m.Q.c0.x;
+            M[0, 4] = m.Q.c1.x;
+            M[0, 5] = m.Q.c2.x;
+            M[1, 3] = m.Q.c0.y;
+            M[1, 4] = m.Q.c1.y;
+            M[1, 5] = m.Q.c2.y;
+            M[2, 3] = m.Q.c0.z;
+            M[2, 4] = m.Q.c1.z;
+            M[2, 5] = m.Q.c2.z;
+
+            M[0, 6] = m.M.c0.x;
+            M[0, 7] = m.M.c1.x;
+            M[0, 8] = m.M.c2.x;
+            M[1, 6] = m.M.c0.y;
+            M[1, 7] = m.M.c1.y;
+            M[1, 8] = m.M.c2.y;
+            M[2, 6] = m.M.c0.z;
+            M[2, 7] = m.M.c1.z;
+            M[2, 8] = m.M.c2.z;
+            return M;
+        }
+
+
+
         public void Execute(int i)
         {
             // calculating the "ideal" position of a particle by multiplying by the deformed shape matrix GM, offset by our center of mass
 
-            float[,] goal_matrix = sum(mult(GM_quad, deltas_quad[i].quad, 3, 9, 9, 1), cm, 3, 1, 3, 1);
+            float[,] goal_matrix = multiplic(convertFromPBig(GMQuadvalid), convertFromP(deltas9[i]), 3, 9, 9, 1);
             float3 goal;
-            goal.x = goal_matrix[0, 0];
-            goal.y = goal_matrix[1, 0];
-            goal.z = goal_matrix[2, 0];
+            goal.x = goal_matrix[0, 0]+cm.x;
+            goal.y = goal_matrix[1, 0]+cm.y;
+            goal.z = goal_matrix[2, 0]+cm.z;
 
             // amount to move our particle this timestep for shape matching. if stiffness = 1.0 this corresponds to rigid body behaviour
             // (though you'd need to do more PBD iterations in the main loop to get this stiff enough)
             float3 delta = (goal - ps[i].p) * stiffness;
 
             Particle p = ps[i];
+            //if (i == 1)
+            //delta = 10.0f * delta;
             p.p += delta;
             ps[i] = p;
 
@@ -1023,6 +1192,107 @@ public class Main : MonoBehaviour
         return inverse;
     }
 
+
+
+
+    qParticle convertToP(float[,] M)
+    {
+        qParticle m = new qParticle();
+        m.A.c0.x = M[0,0];
+        m.A.c1.x = M[1, 0];
+        m.A.c2.x = M[2, 0];
+        m.A.c0.y = M[3, 0];
+        m.A.c1.y = M[4, 0];
+        m.A.c2.y = M[5, 0];
+        m.A.c0.z = M[6, 0];
+        m.A.c1.z = M[7, 0];
+        m.A.c2.z = M[8, 0];
+        return m;
+
+    }
+    float[,] convertFromP(qParticle m)
+    {
+        float[,] M = new float[9, 1];
+        M[0, 0]= m.A.c0.x;
+        M[1, 0]= m.A.c1.x;
+        M[2, 0]= m.A.c2.x;
+        M[3, 0]= m.A.c0.y;
+        M[4, 0]= m.A.c1.y;
+        M[5, 0]= m.A.c2.y;
+        M[6, 0]= m.A.c0.z;
+        M[7, 0]= m.A.c1.z;
+        M[8, 0]= m.A.c2.z;
+        return M;
+    }
+    qParticleBig convertToPBig(float[,] M)
+    {
+        qParticleBig m = new qParticleBig();
+        m.A.c0.x = M[0, 0];
+        m.A.c1.x = M[0, 1];
+        m.A.c2.x = M[0, 2];
+        m.A.c0.y = M[1, 0];
+        m.A.c1.y = M[1, 1];
+        m.A.c2.y = M[1, 2];
+        m.A.c0.z = M[2, 0];
+        m.A.c1.z = M[2, 1];
+        m.A.c2.z = M[2, 2];
+
+        m.Q.c0.x = M[0, 3];
+        m.Q.c1.x = M[0, 4];
+        m.Q.c2.x = M[0, 5];
+        m.Q.c0.y = M[1, 3];
+        m.Q.c1.y = M[1, 4];
+        m.Q.c2.y = M[1, 5];
+        m.Q.c0.z = M[2, 3];
+        m.Q.c1.z = M[2, 4];
+        m.Q.c2.z = M[2, 5];
+
+        m.M.c0.x = M[0, 6];
+        m.M.c1.x = M[0, 7];
+        m.M.c2.x = M[0, 8];
+        m.M.c0.y = M[1, 6];
+        m.M.c1.y = M[1, 7];
+        m.M.c2.y = M[1, 8];
+        m.M.c0.z = M[2, 6];
+        m.M.c1.z = M[2, 7];
+        m.M.c2.z = M[2, 8];
+        return m;
+    }
+    float[,] convertFromPBig(qParticleBig m)
+    {
+        float[,] M = new float[3, 9];
+        M[0, 0]= m.A.c0.x;
+        M[0, 1]= m.A.c1.x;
+        M[0, 2]= m.A.c2.x;
+        M[1, 0]= m.A.c0.y;
+        M[1, 1]= m.A.c1.y;
+        M[1, 2]= m.A.c2.y;
+        M[2, 0]= m.A.c0.z;
+        M[2, 1]= m.A.c1.z;
+        M[2, 2]= m.A.c2.z;
+
+        M[0, 3] = m.Q.c0.x;
+        M[0, 4] = m.Q.c1.x;
+        M[0, 5] = m.Q.c2.x;
+        M[1, 3] = m.Q.c0.y;
+        M[1, 4] = m.Q.c1.y;
+        M[1, 5] = m.Q.c2.y;
+        M[2, 3] = m.Q.c0.z;
+        M[2, 4] = m.Q.c1.z;
+        M[2, 5] = m.Q.c2.z;
+
+        M[0, 6] = m.M.c0.x;
+        M[0, 7] = m.M.c1.x;
+        M[0, 8] = m.M.c2.x;
+        M[1, 6] = m.M.c0.y;
+        M[1, 7] = m.M.c1.y;
+        M[1, 8] = m.M.c2.y;
+        M[2, 6] = m.M.c0.z;
+        M[2, 7] = m.M.c1.z;
+        M[2, 8] = m.M.c2.z;
+        return M;
+    }
+
     #endregion
 
 
@@ -1079,10 +1349,11 @@ public class Main : MonoBehaviour
 
             ps[i] = p;
         }
-        bool could_init = Init_Body();
+        // bool could_init = Init_Body();
+        bool could_init = Init_Body_Quad();
         if (!could_init) print("Issue initializing shape");
 
-        Init_Quad();
+        
 
     }
 
@@ -1216,6 +1487,15 @@ public class Main : MonoBehaviour
             A.c2 /= sqrt_det;
         }
 
+        /*if (det_A != 0)
+        {
+            // just using the absolute value here for stability in the case of inverted shapes
+            float cbrt_det = math.pow(math.abs(det_A),1.0f/3.0f);
+            A.c0 /= cbrt_det;
+            A.c1 /= cbrt_det;
+            A.c2 /= cbrt_det;
+        }*/
+
         // blending between simple shape matched rotation (R term) and the area-preserved deformed shape
         // if linear_deformation_blending = 0, we have "standard" shape matching which only supports small changes from the rest shape. try setting this to 1.0f - pretty amazing
         float3x3 A_term = A * linear_deformation_blending;
@@ -1225,7 +1505,7 @@ public class Main : MonoBehaviour
         float3x3 GM = math.float3x3(A_term.c0 + R_term.c0, A_term.c1 + R_term.c1, A_term.c2 + R_term.c2);
 
         // now actually modify particle positions to apply the shape matching
-        /*var j_get_deltas = new Job_GetDeltas()
+        var j_get_deltas = new Job_GetDeltas()
         {
             cm = cm,
             ps = ps,
@@ -1234,149 +1514,83 @@ public class Main : MonoBehaviour
         };
 
         jh = j_get_deltas.Schedule(num_particles, division);
-        jh.Complete();*/
+        jh.Complete();
 
 
         //Quadratic Deformations
 
-        // calculating Apq in batches, same idea as used for CoM calculation
-        var job_sum_shape_matrix_quad = new Job_SumShapeMatrixQuad()
-        {
-            cm = cm,
-            shape_matrices_quad = shape_matrices_quad,
-            smq=smq,                                 // test type big
-            ps = ps,
-            deltas_quad = deltas_quad,
-            d = d,                           // test type
-            stride = stride
-        };
-
-        jh = job_sum_shape_matrix_quad.Schedule(num_particles, division);
-        jh.Complete();
-
-        float[,] A_quad_pq = new float[3, 9];
-
-        for (int i = 0; i < shape_matrices_quad.Length; i += stride)
-        {
-            float[,] shape_mat_quad = shape_matrices_quad[i].quad;
-
-            A_quad_pq = makeSum(A_quad_pq, shape_mat_quad, 3, 9, 3, 9);
-        }
-
-        for (int i = 0; i < 3; i++)
-        {
-            for (int j = 0; j < 9; j++)
-            {
-                A_quad_pq[i, j] /= division;
-            }
-        }
-
-        // Calculate A = Apq * Aqq for linear deformations
-        float[,] A_quad = new float[3, 9];
-
-        A_quad = multiplic(A_quad_pq, inv_rest_matrix_Quad, 3, 9, 9, 9);
-
-        float[,] R_quad = new float[3, 9];
-
-        R_quad[0, 0] = R.c0.x;
-        R_quad[1, 0] = R.c0.y;
-        R_quad[2, 0] = R.c0.z;
-        R_quad[0, 1] = R.c1.x;
-        R_quad[1, 1] = R.c1.y;
-        R_quad[2, 1] = R.c1.z;
-        R_quad[0, 2] = R.c2.x;
-        R_quad[1, 2] = R.c2.y;
-        R_quad[2, 2] = R.c2.z;
-
-        for (int i = 0; i < 3; i++)
-        {
-            for (int j = 3; j < 9; j++)
-            {
-                R_quad[i, j] = 0.0f;
-            }
-        }
-
-        float[,] A_quad_term = multiplyByNumber(A_quad, 3, 9, linear_deformation_blending);
-        float[,] R_quad_term = multiplyByNumber(R_quad, 3, 9, (1.0f - linear_deformation_blending));
-
-        float[,] GM_quad = makeSum(A_quad_term, R_quad_term, 3, 9, 3, 9);
-
-        float[,] cm_matrix = new float[3, 1];
-        cm_matrix[0, 0] = cm.x;
-        cm_matrix[1, 0] = cm.y;
-        cm_matrix[2, 0] = cm.z;
-
-        // now actually modify particle positions to apply the shape matching
-        var j_get_deltas_quad = new Job_GetDeltasQuad()
-        {
-            cm = cm_matrix,
-            ps = ps,
-            deltas_quad = deltas_quad,
-            d = d,                       //test type
-            GM_quad = GM_quad
-        };
-
-        jh = j_get_deltas_quad.Schedule(num_particles, division);
-        jh.Complete();
-
+        
         return true;
     }
 
-    bool Init_Quad()
+    private bool Init_Body_Quad()
     {
-        deltas_quad = new NativeArray<QuadParticle>(num_particles, Allocator.Persistent);
+        deltas = new NativeArray<float3>(num_particles, Allocator.Persistent);
+        com_sums = new NativeArray<float4>(num_particles, Allocator.Persistent);
+        shape_matrices = new NativeArray<float3x3>(num_particles, Allocator.Persistent);
 
-        d= new NativeArray<qParticle>(num_particles, Allocator.Persistent);   // test type                                                  //test type
+        deltas9= new NativeArray<qParticle>(num_particles, Allocator.Persistent);
+        shape_matrices3x9 = new NativeArray<qParticleBig>(num_particles, Allocator.Persistent);
 
-        float[,] A_quad_qq = new float[9, 9];
-        float[,] dA = new float[9, 9];
+        // calculate initial center of mass
+        float3 rest_cm = math.float3(0);
+        float wsum = 0.0f;
 
         for (int i = 0; i < num_particles; i++)
         {
-            float[,] q_quad = changeToNine(deltas[i]);
-
-            QuadParticle p = new QuadParticle();
-            p.quad = q_quad;
-
-            deltas_quad[i] = p;
-
             float wi = 1.0f / (ps[i].inv_mass + eps);
+            rest_cm += ps[i].x * wi;
+            wsum += wi;
+        }
+        if (wsum == 0.0) return false;
+        rest_cm /= wsum;
 
-            for (int j = 0; j < num_particles; j++)
-            {
-                for (int k = 0; k < num_particles; k++)
-                {
+        // Calculate inverse rest matrix for use in linear deformation shape matching
+        float[,] Aquad = new float[9,9];
+        float3x3 A = math.float3x3(0, 0, 0);
+        for (int i = 0; i < num_particles; i++)
+        {
+            float3 qi = ps[i].x - rest_cm;
 
-                    dA[j, k] = wi * q_quad[j, 0] * q_quad[k, 0];
-                    A_quad_qq = makeSum(A_quad_qq, dA, 9, 9, 9, 9);
-                    dA[j, k] = 0.0f;
-                }
-            }
+            // Caching the position differences for later, they'll never change
+            deltas[i] = qi;
+            float[,] deltasMatrix = changeToNine(deltas[i]);
+            deltas9[i] = convertToP(deltasMatrix);
+            
+            // this is forming Aqq, the second term of equation (7) in the paper
+            float wi = 1.0f / (ps[i].inv_mass + eps);
+            float x2 = wi * qi[0] * qi[0];
+            float y2 = wi * qi[1] * qi[1];
+            float z2 = wi * qi[2] * qi[2];
+            float xy = wi * qi[0] * qi[1];
+            float xz = wi * qi[0] * qi[2];
+            float yz = wi * qi[1] * qi[2];
+            A.c0.x += x2; A.c1.x += xy; A.c2.x += xz;
+            A.c0.y += xy; A.c1.y += y2; A.c2.y += yz;
+            A.c0.z += xz; A.c1.z += yz; A.c2.z += z2;
+
+            float[,] op = multiplyByNumber(deltasMatrix, 9, 1, wi);
+            op = multiplic(op, tranposeMatrix(deltasMatrix), 9, 1, 1, 9);
+            Aquad = makeSum(Aquad, op, 9, 9, 9, 9);
 
 
         }
-
-        inv_rest_matrix_Quad = findInverse(A_quad_qq, 9);
-
-        /*float det = math.determinant(A_quad_qq);
+        float det = math.determinant(A);
         if (math.abs(det) > eps)
         {
             inv_rest_matrix = math.inverse(A);
+            inv_rest_matrix_Quad = findInverse(Aquad, 9);
             return true;
         }
-        return false;*/
-
-
-
-        return true;
+        return false;
     }
 
-    /*bool Quadratic_Deformations()
+    bool Shape_Matching_Quad()
     {
         JobHandle jh;
+
         // this stride is used to split the linear summation in both the center of mass, and the calculation of matrix Apq, into parts.
         // these are then calculated in parallel, and finally combined serially
-
         int stride = ps.Length / division;
 
         // sum up center of mass in parallel
@@ -1404,72 +1618,122 @@ public class Main : MonoBehaviour
         cm /= sum;
 
         // calculating Apq in batches, same idea as used for CoM calculation
-        var job_sum_shape_matrix = new Job_SumShapeMatrixQuad()
+        var job_sum_shape_matrixq = new Job_SumShapeMatrixQuad()
         {
             cm = cm,
-            shape_matrices_quad = shape_matrices_quad,
+            shape_matrices = shape_matrices,
             ps = ps,
-            deltas_quad = deltas_quad,
+            deltas = deltas,
+            deltas9=deltas9,
+            shape_matrices3x9= shape_matrices3x9,
             stride = stride
         };
 
-        jh = job_sum_shape_matrix.Schedule(num_particles, division);
+        jh = job_sum_shape_matrixq.Schedule(num_particles, division);
         jh.Complete();
 
-        float[,] A_quad_pq = new float[3, 9];
-
-        for(int i=0; i < shape_matrices_quad.Length; i += stride)
+        // sum up batches and then normalize by total batch count.
+        float3x3 Apq = math.float3x3(0, 0, 0, 0, 0, 0, 0, 0, 0);
+        float[,] ApqQuad = new float[3, 9];
+        for (int i = 0; i < shape_matrices.Length; i += stride)
         {
-            float[,] shape_mat_quad = shape_matrices_quad[i].quad;
-
-            A_quad_pq = makeSum(A_quad_pq, shape_mat_quad, 3, 9, 3, 9);
+            float3x3 shape_mat = shape_matrices[i];
+            Apq.c0 += shape_mat.c0;
+            Apq.c1 += shape_mat.c1;
+            Apq.c2 += shape_mat.c2;
+            ApqQuad = makeSum(ApqQuad, convertFromPBig(shape_matrices3x9[i]), 3, 9, 3, 9);
         }
-        
-        for(int i=0; i<3; i++)
-        {
-            for(int j=0; j < 9; j++)
-            {
-                A_quad_pq[i, j] /= division;
-            }
-        }
+        Apq.c0 /= division;
+        Apq.c1 /= division;
+        Apq.c2 /= division;
+        ApqQuad = multiplyByNumber(ApqQuad, 3, 9, 1.0f / division);
 
         // Calculate A = Apq * Aqq for linear deformations
-        float[,] A_quad = new float[3, 9];
+        float3x3 A = math.mul(Apq, inv_rest_matrix);
+        float[,] Atil = multiplic(ApqQuad, inv_rest_matrix_Quad, 3, 9, 9, 9);
 
-        A_quad = multiplic(A_quad_pq, inv_rest_matrix_Quad, 3, 9, 9, 9);
+        // calculating the rotation matrix R
+
+        //float3x3 R = polarDecomposition(A);
+        const float eps = 1e-6f;
+        float3x3 R = polarDecompositionStable(A, eps);
 
 
+        float[,] Atilsquare = new float[9, 9];
+        for (int i = 0; i < 9; i++)
+            Atilsquare[i, i] = 1.0f;
+        for (int i = 0; i < 3; i++)
+            for (int j = 0; j < 9; j++)
+                Atilsquare[i, j] = Atil[i, j];
 
+        LU findDet = LUDecomposition(Atilsquare, 9);
+        float det = 1.0f;
+        for (int i = 0; i < 9; i++)
+            det = det * (findDet.L[i, i] * findDet.U[i, i]);
+        //float cbrt = math.pow(math.abs(det), 1.0f / 9.0f); //figure is too small
+         float cbrt = math.sqrt(math.abs(det));
+        if (det < 0)
+            cbrt = -cbrt;
+        Atil = multiplyByNumber(Atil, 3, 9, 1.0f / cbrt);
+
+        // blending between simple shape matched rotation (R term) and the area-preserved deformed shape
+        // if linear_deformation_blending = 0, we have "standard" shape matching which only supports small changes from the rest shape. try setting this to 1.0f - pretty amazing
+        float[,] Atil_term = multiplyByNumber(Atil, 3, 9, linear_deformation_blending);
+        float[,] Rtil_term = new float[3, 9];
+        for (int i = 0; i < 3; i++)
+            for (int j = 0; j < 3; j++)
+                Rtil_term[i, j] = R[i][j];
+        Rtil_term = multiplyByNumber(Rtil_term, 3, 9, 1.0f - linear_deformation_blending);
+
+        // "goal position" matrix composed of a linear blend of A and R
+        float[,] GMQuad = makeSum(Atil_term, Rtil_term, 3, 9, 3, 9);
+        qParticleBig GMQuadvalid = convertToPBig(GMQuad);
+
+        // now actually modify particle positions to apply the shape matching
+        var j_get_deltasq = new Job_GetDeltasQuad()
+        {
+            cm = cm,
+            ps = ps,
+            deltas9 = deltas9,
+            GMQuadvalid = GMQuadvalid
+        };
+
+        jh = j_get_deltasq.Schedule(num_particles, division);
+        jh.Complete();
+
+        
         return true;
-    }*/
+    }
+
 
     // Update is called once per frame
     void FixedUpdate()
     {
-        
-        
+
+
         // first integration step applied to all particles
         var j_integrate_0 = new Job_Integrate0()
         {
             ps = ps,
             dt = dt,
             //teste tempo real
-            //g = g 
+            g = g 
         };
 
         JobHandle jh = j_integrate_0.Schedule(num_particles, division);
         jh.Complete();
 
 
-        
+
         // starts solving shape matching constraints here.
         // normally you'd solve any other PBD / XPBD constraints here
         // potentially within a loop, to help constraints converge with a desired stiffness
-        Solve_Shape_Matching();
+        //Solve_Shape_Matching();
+
+        Shape_Matching_Quad();
 
 
 
-        
         // mouse interaction
 
 
@@ -1488,7 +1752,7 @@ public class Main : MonoBehaviour
         jh = j_integrate_1.Schedule(num_particles, division);
         jh.Complete();
 
-        
+
     }
 
 
@@ -1498,6 +1762,8 @@ public class Main : MonoBehaviour
         deltas.Dispose();
         com_sums.Dispose();
         shape_matrices.Dispose();
+        deltas9.Dispose();
+        shape_matrices3x9.Dispose();
 
     }
 }
